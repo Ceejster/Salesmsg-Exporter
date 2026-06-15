@@ -87,5 +87,58 @@ namespace SalesmessageExporter.Services
 
             return int.Parse(input);
         }
+
+        public long GetConversationId()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Enter Conversation ID:");
+            Console.Write("> ");
+
+            string input = Console.ReadLine();
+
+            while (!long.TryParse(input, out long id) || id <= 0)
+            {
+                Console.WriteLine("Invalid Conversation ID. Try again:");
+                Console.Write("> ");
+
+                input = Console.ReadLine();
+            }
+
+            return long.Parse(input);
+        }
+
+        public List<long> GetConversationIds()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Enter Conversation ID(s) separated by commas:");
+            Console.Write("> ");
+
+            string input = Console.ReadLine() ?? "";
+
+            while (string.IsNullOrWhiteSpace(input))
+            {
+                Console.WriteLine("Input cannot be empty. Try again:");
+                Console.Write("> ");
+                input = Console.ReadLine() ?? "";
+            }
+
+            List<long> ids = new();
+
+            string[] parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (string part in parts)
+            {
+                if (long.TryParse(part.Trim(), out long id))
+                {
+                    ids.Add(id);
+                }
+                else
+                {
+                    Console.WriteLine($"Skipping invalid ID: {part}");
+                }
+            }
+
+            return ids;
+        }
     }
 }
