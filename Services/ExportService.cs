@@ -76,8 +76,7 @@ namespace SalesmessageExporter.Services
                 Console.WriteLine(
                     $"Returned records: {returnedRecordCount}");
 
-                // If fewer than page size returned,
-                // we've reached the end
+                // If fewer than page size returned, we've reached the end
                 hasMoreRecords =
                     returnedRecordCount ==
                     AppSettings.DefaultPageSize;
@@ -113,9 +112,7 @@ namespace SalesmessageExporter.Services
                     }
                 }
 
-                // IMPORTANT:
-                // overlap previous last record
-                // with next request's first record
+                // IMPORTANT: overlap previous last record with next request's first record
                 currentOffset +=
                     (AppSettings.DefaultPageSize - 1);
 
@@ -126,6 +123,193 @@ namespace SalesmessageExporter.Services
             Console.WriteLine();
             Console.WriteLine(
                 "Inbox export completed.");
+        }
+
+        // Stage 1:
+        // Collect all OPEN and CLOSED conversation IDs
+        // and save them into a single JSON file.
+        public async Task ExportConversationIdsAsync(
+            int inboxId,
+            string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Collecting conversation IDs for {orgName}...");
+            Console.WriteLine();
+
+            HashSet<long> conversationIds =
+                await _apiService.GetAllConversationIdsAsync(
+                    inboxId);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Found {conversationIds.Count} unique conversations.");
+
+            // Display IDs to user
+            Console.WriteLine();
+            Console.WriteLine("Conversation IDs:");
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Found {conversationIds.Count} unique conversations.");
+
+            //If we want to display all IDs in the console, we can uncomment this line.
+
+            //Console.WriteLine(
+            //    string.Join(", ", conversationIds));
+
+            string formattedJson =
+                JsonSerializer.Serialize(
+                    conversationIds,
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+
+            await FileExportHelper.SaveConversationIdsAsync(
+                formattedJson,
+                orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                "Conversation ID export completed.");
+        }
+
+
+        public async Task ExportFullConversationHistoryAsync( int inboxId, string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Starting FULL conversation export for {orgName}");
+            Console.WriteLine();
+
+            // Step 1: get all conversation IDs
+            HashSet<long> conversationIds =
+                await _apiService.GetAllConversationIdsAsync(inboxId);
+
+            List<long> idList = conversationIds.ToList();
+
+            Console.WriteLine($"Total conversations: {idList.Count}");
+            Console.WriteLine();
+
+            int index = 1;
+
+            // Step 2: export each conversation
+            foreach (long conversationId in idList)
+            {
+                Console.WriteLine(
+                    $"[{index}/{idList.Count}] Exporting conversation {conversationId}");
+
+                await ExportSingleConversationAsync(
+                    conversationId,
+                    orgName);
+
+                index++;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("FULL EXPORT COMPLETE");
+        }
+
+        private async Task ExportSingleConversationAsync(long conversationId, string orgName)
+        {
+            int page = 1;
+            bool hasMorePages = true;
+
+            List<ExportMessage> allMessages = new();
+
+            while (hasMorePages)
+            {
+                var response =
+                    await _apiService.GetConversationMessagesPageAsync(
+                        conversationId,
+                        page);
+
+                List<ExportMessage> messages =
+                    MessageMapper.MapMessages(
+                        response.RawJson);
+
+                allMessages.AddRange(messages);
+
+                hasMorePages =
+                    response.CurrentPage < response.TotalPages;
+
+                page++;
+            }
+
+            var exportObject = new
+            {
+                conversation_id = conversationId,
+                exported_at = DateTime.UtcNow,
+                message_count = allMessages.Count,
+                messages = allMessages
+            };
+
+            string json =
+                JsonSerializer.Serialize(
+                    exportObject,
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+
+            await FileExportHelper.SaveConversationAsync(
+                json,
+                orgName,
+                conversationId);
+        }
+
+        public async Task ExportSingleConversationByIdAsync(long conversationId, string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Exporting conversation {conversationId}");
+
+            await ExportSingleConversationAsync(
+                conversationId,
+                orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                "Conversation export complete.");
+        }
+
+        public async Task ExportConversationListAsync(
+    List<long> conversationIds,
+    string orgName)
+        {
+            if (conversationIds == null || conversationIds.Count == 0)
+            {
+                Console.WriteLine("No conversation IDs provided.");
+                return;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine($"Starting export of {conversationIds.Count} conversations...");
+            Console.WriteLine();
+
+            int index = 1;
+
+            foreach (long conversationId in conversationIds)
+            {
+                Console.WriteLine(
+                    $"[{index}/{conversationIds.Count}] Exporting {conversationId}");
+
+                try
+                {
+                    await ExportSingleConversationAsync(
+                        conversationId,
+                        orgName);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"Failed conversation {conversationId}: {ex.Message}");
+                }
+
+                index++;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("Conversation list export complete.");
         }
     }
 }

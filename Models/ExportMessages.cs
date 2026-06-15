@@ -12,18 +12,6 @@
 
         public string Body { get; set; }
 
-        public string ReceivedAt { get; set; }
-
-        public string SentAt { get; set; }
-
-        public string DeliveredAt { get; set; }
-
-        public string FailedAt { get; set; }
-
-        public string FailedReason { get; set; }
-
-        public string CreatedAt { get; set; }
-
         public bool Automated { get; set; }
 
         public ExportMessageRecord Record { get; set; }
@@ -58,8 +46,6 @@
 
         public string Number { get; set; }
 
-        public string CreatedAt { get; set; }
-
         public List<ExportTag> Tags { get; set; }
 
         public List<ExportCustomField> CustomFields { get; set; }
@@ -81,12 +67,6 @@
 
         public decimal? Number { get; set; }
 
-        public string Date { get; set; }
-
-        public string CreatedAt { get; set; }
-
-        public string UpdatedAt { get; set; }
-
         public List<ExportCustomFieldValue> Value { get; set; }
     }
 
@@ -99,13 +79,6 @@
 
     public class ExportMessageUser
     {
-        public long Id { get; set; }
-
-        public string FullName { get; set; }
-
-        public string Email { get; set; }
-
-        public string FormattedNumber { get; set; }
     }
 
     public class ExportMedia
