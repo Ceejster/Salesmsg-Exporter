@@ -28,9 +28,7 @@ namespace SalesmessageExporter.Services
             try
             {
                 HttpResponseMessage response =
-                    await _httpClient.GetAsync(
-                        $"{AppSettings.ConversationsEndpoint}?limit=1"
-                    );
+                    await _httpClient.GetAsync(AppSettings.InboxesEndpoint);
 
                 return response.IsSuccessStatusCode;
             }
@@ -54,12 +52,15 @@ namespace SalesmessageExporter.Services
                 $"&limit={AppSettings.DefaultPageSize}" +
                 $"&offset={offset}";
 
-            HttpResponseMessage response =
-                await _httpClient.GetAsync(endpoint);
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(endpoint);
 
-            response.EnsureSuccessStatusCode();
+                response.EnsureSuccessStatusCode();
 
-            return await response.Content.ReadAsStringAsync();
+                return await response.Content.ReadAsStringAsync();
+            });
         }
 
         // -----------------------------
@@ -77,12 +78,15 @@ namespace SalesmessageExporter.Services
                 $"&limit={AppSettings.DefaultPageSize}" +
                 $"&offset={offset}";
 
-            HttpResponseMessage response =
-                await _httpClient.GetAsync(endpoint);
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(endpoint);
 
-            response.EnsureSuccessStatusCode();
+                response.EnsureSuccessStatusCode();
 
-            return await response.Content.ReadAsStringAsync();
+                return await response.Content.ReadAsStringAsync();
+            });
         }
 
         // ----------------------------------------------------
@@ -98,33 +102,85 @@ namespace SalesmessageExporter.Services
                 $"?per_page=15" +
                 $"&page={page}";
 
-            HttpResponseMessage response =
-                await _httpClient.GetAsync(endpoint);
-
-            response.EnsureSuccessStatusCode();
-
-            string json =
-                await response.Content.ReadAsStringAsync();
-
-            using JsonDocument doc =
-                JsonDocument.Parse(json);
-
-            int currentPage =
-                doc.RootElement
-                    .GetProperty("current_page")
-                    .GetInt32();
-
-            int totalPages =
-                doc.RootElement
-                    .GetProperty("total")
-                    .GetInt32();
-
-            return new MessagePageResponse
+            return await ExecuteWithRetryAsync(async () =>
             {
-                CurrentPage = currentPage,
-                TotalPages = totalPages,
-                RawJson = json
-            };
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(endpoint);
+
+                response.EnsureSuccessStatusCode();
+
+                string json =
+                    await response.Content.ReadAsStringAsync();
+
+                using JsonDocument doc =
+                    JsonDocument.Parse(json);
+
+                int currentPage =
+                    doc.RootElement
+                        .GetProperty("current_page")
+                        .GetInt32();
+
+                // last_page is total pages; fall back to calculating
+                // from total records ÷ per_page if last_page is absent/null
+                int totalPages = 1;
+
+                if (doc.RootElement.TryGetProperty("last_page", out JsonElement lastPageEl)
+                    && lastPageEl.ValueKind != JsonValueKind.Null
+                    && lastPageEl.TryGetInt32(out int lp))
+                {
+                    totalPages = lp;
+                }
+                else if (
+                    doc.RootElement.TryGetProperty("total", out JsonElement totalEl)
+                    && totalEl.TryGetInt32(out int totalRecords)
+                    && doc.RootElement.TryGetProperty("per_page", out JsonElement perPageEl)
+                    && perPageEl.ValueKind != JsonValueKind.Null
+                    && perPageEl.TryGetInt32(out int perPage)
+                    && perPage > 0)
+                {
+                    totalPages = (int)Math.Ceiling((double)totalRecords / perPage);
+                }
+
+                return new MessagePageResponse
+                {
+                    CurrentPage = currentPage,
+                    TotalPages = totalPages,
+                    RawJson = json
+                };
+            });
+        }
+
+        // -----------------------------------------------------
+        // RETRY HELPER — exponential backoff on timeout/5xx
+        // -----------------------------------------------------
+        private async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> operation)
+        {
+            int attempt = 0;
+
+            while (true)
+            {
+                attempt++;
+
+                try
+                {
+                    return await operation();
+                }
+                catch (Exception ex) when (
+                    attempt < AppSettings.MaxRetryAttempts &&
+                    (ex is TaskCanceledException ||
+                     ex is HttpRequestException))
+                {
+                    int delaySeconds =
+                        AppSettings.RetryDelayBaseSeconds * attempt;
+
+                    Console.WriteLine(
+                        $"Request failed (attempt {attempt}/{AppSettings.MaxRetryAttempts}): " +
+                        $"{ex.Message}. Retrying in {delaySeconds}s...");
+
+                    await Task.Delay(
+                        TimeSpan.FromSeconds(delaySeconds));
+                }
+            }
         }
 
         // ----------------------------------------------------
@@ -154,6 +210,99 @@ namespace SalesmessageExporter.Services
             return pages;
         }
 
+        // Returns id + name for every inbox the account has access to
+        public async Task<List<(int Id, string Name)>> GetAllInboxInfoAsync()
+        {
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(AppSettings.InboxesEndpoint);
+
+                response.EnsureSuccessStatusCode();
+
+                string json =
+                    await response.Content.ReadAsStringAsync();
+
+                using JsonDocument doc =
+                    JsonDocument.Parse(json);
+
+                var inboxes = new List<(int Id, string Name)>();
+
+                JsonElement root = doc.RootElement;
+
+                IEnumerable<JsonElement> items =
+                    root.ValueKind == JsonValueKind.Array
+                        ? root.EnumerateArray()
+                        : root.TryGetProperty("data", out JsonElement data)
+                            ? data.EnumerateArray()
+                            : Enumerable.Empty<JsonElement>();
+
+                foreach (JsonElement inbox in items)
+                {
+                    if (inbox.TryGetProperty("id", out JsonElement idEl) &&
+                        idEl.TryGetInt32(out int id))
+                    {
+                        string name = inbox.TryGetProperty(
+                            "name", out JsonElement nameEl)
+                            ? nameEl.GetString() ?? $"Inbox_{id}"
+                            : $"Inbox_{id}";
+
+                        Console.WriteLine($"  Inbox {id}: {name}");
+                        inboxes.Add((id, name));
+                    }
+                }
+
+                return inboxes;
+            });
+        }
+
+        // Returns the ID of every inbox the account has access to
+        public async Task<List<int>> GetAllInboxIdsAsync()
+        {
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(AppSettings.InboxesEndpoint);
+
+                response.EnsureSuccessStatusCode();
+
+                string json =
+                    await response.Content.ReadAsStringAsync();
+
+                using JsonDocument doc =
+                    JsonDocument.Parse(json);
+
+                var ids = new List<int>();
+
+                JsonElement root = doc.RootElement;
+
+                // Handle a bare array or an object wrapping a "data" array
+                IEnumerable<JsonElement> items =
+                    root.ValueKind == JsonValueKind.Array
+                        ? root.EnumerateArray()
+                        : root.TryGetProperty("data", out JsonElement data)
+                            ? data.EnumerateArray()
+                            : Enumerable.Empty<JsonElement>();
+
+                foreach (JsonElement inbox in items)
+                {
+                    if (inbox.TryGetProperty("id", out JsonElement idEl) &&
+                        idEl.TryGetInt32(out int id))
+                    {
+                        string name = inbox.TryGetProperty(
+                            "name", out JsonElement nameEl)
+                            ? nameEl.GetString() ?? ""
+                            : "";
+
+                        Console.WriteLine($"  Inbox {id}: {name}");
+                        ids.Add(id);
+                    }
+                }
+
+                return ids;
+            });
+        }
+
         // Collects all OPEN and CLOSED conversation IDs
         public async Task<HashSet<long>> GetAllConversationIdsAsync(
             int inboxId)
@@ -171,6 +320,78 @@ namespace SalesmessageExporter.Services
                 conversationIds);
 
             return conversationIds;
+        }
+
+        // Collects conversation IDs + contact info for index generation
+        public async Task<List<ConversationIndexEntry>> GetAllConversationInfoAsync(
+            int inboxId,
+            string inboxName)
+        {
+            var entries = new List<ConversationIndexEntry>();
+
+            await CollectConversationInfoByFilterAsync(inboxId, inboxName, "open",   entries);
+            await CollectConversationInfoByFilterAsync(inboxId, inboxName, "closed", entries);
+
+            return entries;
+        }
+
+        private async Task CollectConversationInfoByFilterAsync(
+            int inboxId,
+            string inboxName,
+            string filter,
+            List<ConversationIndexEntry> entries)
+        {
+            int currentOffset = 0;
+            bool hasMoreRecords = true;
+            var seen = new HashSet<long>();
+
+            while (hasMoreRecords)
+            {
+                string json =
+                    await GetConversationsPageRawAsync(inboxId, currentOffset, filter);
+
+                using JsonDocument doc = JsonDocument.Parse(json);
+
+                if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                    break;
+
+                int recordCount = 0;
+
+                foreach (JsonElement conv in doc.RootElement.EnumerateArray())
+                {
+                    recordCount++;
+
+                    if (!conv.TryGetProperty("id", out JsonElement idEl) ||
+                        !idEl.TryGetInt64(out long id) ||
+                        !seen.Add(id))
+                        continue;
+
+                    string contactName  = "";
+                    string contactPhone = "";
+                    string contactEmail = "";
+
+                    if (conv.TryGetProperty("contact", out JsonElement contactEl) &&
+                        contactEl.ValueKind == JsonValueKind.Object)
+                    {
+                        contactName  = GetJsonString(contactEl, "full_name");
+                        contactPhone = GetJsonString(contactEl, "formatted_number");
+                        contactEmail = GetJsonString(contactEl, "email");
+                    }
+
+                    entries.Add(new ConversationIndexEntry
+                    {
+                        ConversationId = id,
+                        InboxId        = inboxId,
+                        InboxName      = inboxName,
+                        ContactName    = contactName,
+                        ContactPhone   = contactPhone,
+                        ContactEmail   = contactEmail
+                    });
+                }
+
+                hasMoreRecords = recordCount == AppSettings.DefaultPageSize;
+                currentOffset += (AppSettings.DefaultPageSize - 1);
+            }
         }
 
         // Internal helper
@@ -225,6 +446,14 @@ namespace SalesmessageExporter.Services
                 currentOffset +=
                     (AppSettings.DefaultPageSize - 1);
             }
+        }
+
+        private static string GetJsonString(JsonElement element, string key)
+        {
+            if (!element.TryGetProperty(key, out JsonElement prop))
+                return "";
+
+            return prop.ValueKind == JsonValueKind.Null ? "" : prop.ToString();
         }
     }
 

@@ -1,4 +1,4 @@
-﻿using SalesmessageExporter.Services;
+using SalesmessageExporter.Services;
 
 namespace SalesmessageExporter
 {
@@ -8,11 +8,8 @@ namespace SalesmessageExporter
         {
             var menuService = new MenuService();
 
-            // Get PAT once per session
-            string pat = menuService.GetPat();
-
-            var apiService = new SalesmessageApiService(pat);
-            var exportService = new ExportService(apiService);
+            var (apiService, exportService) =
+                await GetValidatedServicesAsync(menuService);
 
             bool running = true;
 
@@ -22,7 +19,9 @@ namespace SalesmessageExporter
                 Console.WriteLine("=== Salesmessage Export Tool ===");
                 Console.WriteLine("1. Export Inbox Conversations");
                 Console.WriteLine("2. Export Messages");
-                Console.WriteLine("3. Exit");
+                Console.WriteLine("3. Generate Credit Report");
+                Console.WriteLine("4. Change PAT");
+                Console.WriteLine("5. Exit");
                 Console.WriteLine();
                 Console.Write("Select option: ");
 
@@ -55,9 +54,6 @@ namespace SalesmessageExporter
 
                             Console.WriteLine(
                                 $"Start Page: {startPage}");
-
-                            Console.WriteLine(
-                                $"Start Offset: {startOffset}");
 
                             Console.WriteLine();
 
@@ -123,18 +119,15 @@ namespace SalesmessageExporter
 
                                     // ---------------------------------
                                     // EXPORT ENTIRE ACCOUNT
+                                    // No inbox ID needed — fetches all inboxes automatically
                                     // ---------------------------------
                                     case "2":
                                         {
-                                            int inboxId =
-                                                menuService.GetInboxId();
-
                                             string orgName =
                                                 menuService.GetOrganizationName();
 
                                             await exportService
                                                 .ExportFullConversationHistoryAsync(
-                                                    inboxId,
                                                     orgName);
 
                                             break;
@@ -158,7 +151,35 @@ namespace SalesmessageExporter
                             break;
                         }
 
+                    // ---------------------------------
+                    // GENERATE CREDIT REPORT
+                    // ---------------------------------
                     case "3":
+                        {
+                            string orgName =
+                                menuService.GetOrganizationName();
+
+                            await exportService
+                                .GenerateCreditReportAsync(orgName);
+
+                            break;
+                        }
+
+                    // ---------------------------------
+                    // CHANGE PAT
+                    // ---------------------------------
+                    case "4":
+                        {
+                            (apiService, exportService) =
+                                await GetValidatedServicesAsync(menuService);
+
+                            break;
+                        }
+
+                    // ---------------------------------
+                    // EXIT
+                    // ---------------------------------
+                    case "5":
                         {
                             running = false;
                             break;
@@ -171,6 +192,34 @@ namespace SalesmessageExporter
                             break;
                         }
                 }
+            }
+        }
+
+        // Prompts for a PAT and loops until a valid one is provided
+        static async Task<(SalesmessageApiService, ExportService)>
+            GetValidatedServicesAsync(MenuService menuService)
+        {
+            while (true)
+            {
+                string pat = menuService.GetPat();
+
+                var apiService =
+                    new SalesmessageApiService(pat);
+
+                Console.Write("Validating PAT...");
+
+                bool valid =
+                    await apiService.ValidatePATAsync();
+
+                if (valid)
+                {
+                    Console.WriteLine(" Valid.");
+
+                    return (apiService, new ExportService(apiService));
+                }
+
+                Console.WriteLine(
+                    " Invalid — PAT not recognised or expired. Try again.");
             }
         }
     }

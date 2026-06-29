@@ -25,11 +25,21 @@ namespace SalesmessageExporter.Helpers
                     ConversationId = GetLong(item, "conversation_id"),
                     Status = GetString(item, "status"),
                     Type = GetString(item, "type"),
-                    Body = GetString(item, "body"),
+                    Direction = GetString(item, "direction"),
+                    Body = GetString(item, "body_raw") is { Length: > 0 } raw
+                        ? raw
+                        : GetString(item, "body"),
                     Automated = GetBool(item, "automated"),
+                    SentAt = GetString(item, "sent_at"),
+                    ReceivedAt = GetString(item, "received_at"),
+                    DeliveredAt = GetString(item, "delivered_at"),
+                    FailedAt = GetString(item, "failed_at"),
+                    CreatedAt = GetString(item, "created_at"),
+                    Source = GetString(item, "source"),
 
                     Record = MapRecord(item),
                     Contact = MapContact(item),
+                    User = MapUser(item),
                     Media = MapMedia(item)
                 });
             }
@@ -65,8 +75,53 @@ namespace SalesmessageExporter.Helpers
                 FullName = GetString(contact, "full_name"),
                 Email = GetString(contact, "email"),
                 Number = GetString(contact, "formatted_number"),
-                Tags = new List<ExportTag>(), // optional later
+                Tags = MapContactTags(contact),
                 CustomFields = new List<ExportCustomField>()
+            };
+        }
+
+        private static List<ExportTag> MapContactTags(JsonElement contact)
+        {
+            List<ExportTag> tags = new();
+
+            if (!contact.TryGetProperty("tags", out JsonElement tagsEl) ||
+                tagsEl.ValueKind != JsonValueKind.Array)
+                return tags;
+
+            foreach (JsonElement tag in tagsEl.EnumerateArray())
+            {
+                if (tag.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                tags.Add(new ExportTag
+                {
+                    Id = GetLong(tag, "id"),
+                    Name = GetString(tag, "name"),
+                    Label = GetString(tag, "label"),
+                    CreatedAt = GetString(tag, "created_at")
+                });
+            }
+
+            return tags;
+        }
+
+        private static ExportMessageUser MapUser(JsonElement item)
+        {
+            if (!item.TryGetProperty("user", out JsonElement user) ||
+                user.ValueKind != JsonValueKind.Object)
+                return null;
+
+            long userId = GetLong(user, "id");
+
+            if (userId == 0)
+                return null;
+
+            return new ExportMessageUser
+            {
+                Id = userId,
+                FullName = GetString(user, "full_name"),
+                Email = GetString(user, "email"),
+                FormattedNumber = GetString(user, "formatted_number")
             };
         }
 

@@ -11,8 +11,12 @@
         // Safety checkpoint (prevents runaway exports)
         public const int PageCheckpoint = 5000;
 
-        // Http timeout (seconds)
-        public const int HttpTimeoutSeconds = 30;
+        // Http timeout (seconds) — set high for large bulk exports
+        public const int HttpTimeoutSeconds = 120;
+
+        // Retry settings for transient failures
+        public const int MaxRetryAttempts = 3;
+        public const int RetryDelayBaseSeconds = 5;
 
         // -------------------------
         // ENDPOINTS
@@ -25,5 +29,7 @@
         public const string MessagesEndpoint = "messages";
 
         public const string ConversationExportEndpoint = "conversations";
+
+        public const string InboxesEndpoint = "teams";
     }
 }
