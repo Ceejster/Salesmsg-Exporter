@@ -31,5 +31,7 @@
         public const string ConversationExportEndpoint = "conversations";
 
         public const string InboxesEndpoint = "teams";
+
+        public const string UsersEndpoint = "users";
     }
 }

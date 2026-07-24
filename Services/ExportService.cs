@@ -727,6 +727,27 @@ namespace SalesmessageExporter.Services
                 $"Files saved to ~/Salesmsg/{SanitizeName(orgName)}/");
         }
 
+        public async Task ExportMembersAsync(string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Exporting members for {orgName}...");
+
+            string raw = await _apiService.GetAllMembersRawAsync();
+
+            List<ExportMember> members = MemberMapper.MapMembers(raw);
+
+            Console.WriteLine($"Found {members.Count} member(s).");
+
+            string json = JsonSerializer.Serialize(
+                members,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveMembersAsync(json, orgName);
+
+            Console.WriteLine(
+                $"Members saved to ~/Salesmsg/{SanitizeName(orgName)}/Members.json");
+        }
+
         private static string SanitizeName(string name) =>
             System.Text.RegularExpressions.Regex.Replace(name, @"[^\w\d\-]", "");
     }

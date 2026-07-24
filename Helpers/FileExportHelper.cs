@@ -54,6 +54,16 @@ namespace SalesmessageExporter.Helpers
                 json);
         }
 
+        // Saves the member/user export as JSON
+        public static async Task SaveMembersAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "Members.json"),
+                json);
+        }
+
         // Saves a CSV mapping conversation IDs to contact identifiers
         public static async Task SaveConversationIndexCsvAsync(
             IEnumerable<ConversationIndexEntry> entries,

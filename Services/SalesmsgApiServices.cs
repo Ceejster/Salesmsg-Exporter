@@ -448,6 +448,20 @@ namespace SalesmessageExporter.Services
             }
         }
 
+        // Returns all members/users in the org
+        public async Task<string> GetAllMembersRawAsync()
+        {
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(AppSettings.UsersEndpoint);
+
+                response.EnsureSuccessStatusCode();
+
+                return await response.Content.ReadAsStringAsync();
+            });
+        }
+
         private static string GetJsonString(JsonElement element, string key)
         {
             if (!element.TryGetProperty(key, out JsonElement prop))
