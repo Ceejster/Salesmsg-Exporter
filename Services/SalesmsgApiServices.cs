@@ -168,7 +168,8 @@ namespace SalesmessageExporter.Services
                 catch (Exception ex) when (
                     attempt < AppSettings.MaxRetryAttempts &&
                     (ex is TaskCanceledException ||
-                     ex is HttpRequestException))
+                     (ex is HttpRequestException httpEx &&
+                      httpEx.StatusCode == null))) // null = network failure, not HTTP error
                 {
                     int delaySeconds =
                         AppSettings.RetryDelayBaseSeconds * attempt;
@@ -446,6 +447,26 @@ namespace SalesmessageExporter.Services
                 currentOffset +=
                     (AppSettings.DefaultPageSize - 1);
             }
+        }
+
+        // Returns one page of call history for an inbox
+        public async Task<string> GetCallHistoryPageRawAsync(int inboxId, int page)
+        {
+            string endpoint =
+                $"{AppSettings.CallHistoryEndpoint}" +
+                $"?team_id={inboxId}" +
+                $"&team_type=local" +
+                $"&page={page}";
+
+            return await ExecuteWithRetryAsync(async () =>
+            {
+                HttpResponseMessage response =
+                    await _httpClient.GetAsync(endpoint);
+
+                response.EnsureSuccessStatusCode();
+
+                return await response.Content.ReadAsStringAsync();
+            });
         }
 
         // Returns all members/users in the org

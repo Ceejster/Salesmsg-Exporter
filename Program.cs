@@ -21,8 +21,9 @@ namespace SalesmessageExporter
                 Console.WriteLine("2. Export Messages");
                 Console.WriteLine("3. Generate Credit Report");
                 Console.WriteLine("4. Export Members");
-                Console.WriteLine("5. Change PAT");
-                Console.WriteLine("6. Exit");
+                Console.WriteLine("5. Export Call History");
+                Console.WriteLine("6. Change PAT");
+                Console.WriteLine("7. Exit");
                 Console.WriteLine();
                 Console.Write("Select option: ");
 
@@ -181,9 +182,23 @@ namespace SalesmessageExporter
                         }
 
                     // ---------------------------------
-                    // CHANGE PAT
+                    // EXPORT CALL HISTORY
                     // ---------------------------------
                     case "5":
+                        {
+                            string orgName =
+                                menuService.GetOrganizationName();
+
+                            await exportService
+                                .ExportCallHistoryAsync(orgName);
+
+                            break;
+                        }
+
+                    // ---------------------------------
+                    // CHANGE PAT
+                    // ---------------------------------
+                    case "6":
                         {
                             (apiService, exportService) =
                                 await GetValidatedServicesAsync(menuService);
@@ -194,7 +209,7 @@ namespace SalesmessageExporter
                     // ---------------------------------
                     // EXIT
                     // ---------------------------------
-                    case "6":
+                    case "7":
                         {
                             running = false;
                             break;

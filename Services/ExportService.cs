@@ -727,6 +727,106 @@ namespace SalesmessageExporter.Services
                 $"Files saved to ~/Salesmsg/{SanitizeName(orgName)}/");
         }
 
+        public async Task ExportCallHistoryAsync(string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Exporting call history for {orgName}...");
+            Console.WriteLine();
+
+            Console.WriteLine("Fetching inboxes...");
+
+            List<(int Id, string Name)> inboxes =
+                await _apiService.GetAllInboxInfoAsync();
+
+            Console.WriteLine($"Found {inboxes.Count} inbox(es).");
+            Console.WriteLine();
+
+            var export = new CallHistoryExport
+            {
+                OrgName    = orgName,
+                ExportedAt = DateTime.UtcNow.ToString("O")
+            };
+
+            foreach ((int inboxId, string inboxName) in inboxes)
+            {
+                Console.Write(
+                    $"Fetching calls for inbox {inboxId} ({inboxName})...");
+
+                var inboxHistory = new InboxCallHistory
+                {
+                    InboxId   = inboxId,
+                    InboxName = inboxName
+                };
+
+                try
+                {
+                    int page     = 1;
+                    bool hasMore = true;
+
+                    while (hasMore)
+                    {
+                        string raw =
+                            await _apiService.GetCallHistoryPageRawAsync(
+                                inboxId, page);
+
+                        (List<ExportCallEntry> calls, bool more) =
+                            CallHistoryMapper.MapPage(raw);
+
+                        foreach (ExportCallEntry call in calls)
+                        {
+                            inboxHistory.Calls.Add(call);
+
+                            if (string.Equals(call.Type, "inbound",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.InboundCalls++;
+                            else
+                                inboxHistory.OutboundCalls++;
+
+                            if (string.Equals(call.Outcome, "missed",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.MissedCalls++;
+                            else if (string.Equals(call.Outcome, "answered",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.AnsweredCalls++;
+                        }
+
+                        hasMore = more;
+                        page++;
+                    }
+
+                    inboxHistory.TotalCalls = inboxHistory.Calls.Count;
+                    Console.WriteLine($" {inboxHistory.TotalCalls} call(s).");
+                }
+                catch (System.Net.Http.HttpRequestException ex)
+                    when (ex.StatusCode ==
+                          System.Net.HttpStatusCode.Forbidden)
+                {
+                    Console.WriteLine(" no access — skipping.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($" failed: {ex.Message}");
+                }
+
+                export.Inboxes.Add(inboxHistory);
+            }
+
+            string json = JsonSerializer.Serialize(
+                export,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveCallHistoryAsync(json, orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Call history saved — " +
+                $"{export.ActiveInboxes} active, " +
+                $"{export.InactiveInboxes} inactive inbox(es).");
+
+            Console.WriteLine(
+                $"Saved to ~/Salesmsg/{SanitizeName(orgName)}/CallHistory.json");
+        }
+
         public async Task ExportMembersAsync(string orgName)
         {
             Console.WriteLine();

@@ -54,6 +54,16 @@ namespace SalesmessageExporter.Helpers
                 json);
         }
 
+        // Saves the call history export
+        public static async Task SaveCallHistoryAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "CallHistory.json"),
+                json);
+        }
+
         // Saves the member/user export as JSON
         public static async Task SaveMembersAsync(string json, string orgName)
         {
