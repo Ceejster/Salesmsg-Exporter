@@ -33,5 +33,12 @@
         public const string InboxesEndpoint = "teams";
 
         public const string UsersEndpoint = "users";
+
+        // Token refresh — full URL because refresh lives on v2.2, not v2.3
+        public const string TokenRefreshEndpoint =
+            "https://api.salesmessage.com/pub/v2.2/oauth/personal-token/refresh";
+
+        public const int TokenRefreshWarningMinutes  = 30;
+        public const int TokenRefreshThresholdMinutes = 15;
     }
 }

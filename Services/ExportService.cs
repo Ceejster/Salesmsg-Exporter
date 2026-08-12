@@ -14,115 +14,83 @@ namespace SalesmessageExporter.Services
             _apiService = apiService;
         }
 
-        // Main inbox export loop
+        // Main inbox export loop — fetches open then closed conversations
         public async Task ExportInboxAsync(
             int inboxId,
             string orgName,
             int startOffset = 0,
             int startPage = 1)
         {
-            int currentOffset = startOffset;
-
-            // User-facing page number
-            int currentPage = startPage;
-
-            bool hasMoreRecords = true;
-
-            Console.WriteLine(
-                $"Starting export for {orgName}");
-
-            Console.WriteLine(
-                $"Starting from page {currentPage}");
-
+            Console.WriteLine($"Starting export for {orgName}");
             Console.WriteLine();
 
-            while (hasMoreRecords)
+            int currentPage = startPage;
+
+            foreach (string filter in new[] { "open", "closed", "outbound" })
             {
-                Console.WriteLine(
-                    $"Fetching Page {currentPage} " +
-                    $"(Offset {currentOffset})...");
+                Console.WriteLine($"--- Fetching {filter} conversations ---");
 
-                // Pull raw JSON from API
-                string rawJson =
-                    await _apiService.GetConversationsPageRawAsync(
-                        inboxId,
-                        currentOffset);
+                int currentOffset = startOffset;
+                bool hasMoreRecords = true;
 
-                // Convert raw JSON into clean export objects
-                List<ExportConversation> conversations =
-                    ConversationMapper.MapConversations(rawJson);
-
-                // Convert cleaned objects back into readable JSON
-                string formattedJson =
-                    JsonSerializer.Serialize(
-                        conversations,
-                        new JsonSerializerOptions
-                        {
-                            WriteIndented = true
-                        });
-
-                // Save export file
-                await FileExportHelper.SaveJsonPageAsync(
-                    formattedJson,
-                    orgName,
-                    currentPage);
-
-                Console.WriteLine(
-                    $"Saved Page {currentPage}.");
-
-                int returnedRecordCount =
-                    conversations.Count;
-
-                Console.WriteLine(
-                    $"Returned records: {returnedRecordCount}");
-
-                // If fewer than page size returned, we've reached the end
-                hasMoreRecords =
-                    returnedRecordCount ==
-                    AppSettings.DefaultPageSize;
-
-                Console.WriteLine(
-                    $"Has more records: {hasMoreRecords}");
-
-                // Pause every checkpoint interval
-                if (currentPage %
-                    AppSettings.PageCheckpoint == 0)
+                while (hasMoreRecords)
                 {
-                    Console.WriteLine();
                     Console.WriteLine(
-                        $"Checkpoint reached at Page {currentPage}");
+                        $"Fetching Page {currentPage} " +
+                        $"(Offset {currentOffset})...");
 
-                    Console.WriteLine(
-                        "Continue export? (Y/N)");
+                    string rawJson =
+                        await _apiService.GetConversationsPageRawAsync(
+                            inboxId,
+                            currentOffset,
+                            filter);
 
-                    Console.Write("> ");
+                    List<ExportConversation> conversations =
+                        ConversationMapper.MapConversations(rawJson);
 
-                    string input =
-                        Console.ReadLine() ?? "";
+                    string formattedJson =
+                        JsonSerializer.Serialize(
+                            conversations,
+                            new JsonSerializerOptions { WriteIndented = true });
 
-                    if (!input.Equals(
-                        "Y",
-                        StringComparison.OrdinalIgnoreCase))
+                    await FileExportHelper.SaveJsonPageAsync(
+                        formattedJson,
+                        orgName,
+                        currentPage);
+
+                    Console.WriteLine($"Saved Page {currentPage}.");
+
+                    int returnedRecordCount = conversations.Count;
+
+                    Console.WriteLine($"Returned records: {returnedRecordCount}");
+
+                    hasMoreRecords = returnedRecordCount == AppSettings.DefaultPageSize;
+
+                    Console.WriteLine($"Has more records: {hasMoreRecords}");
+
+                    if (currentPage % AppSettings.PageCheckpoint == 0)
                     {
                         Console.WriteLine();
-                        Console.WriteLine(
-                            "Export stopped by user.");
+                        Console.WriteLine($"Checkpoint reached at Page {currentPage}");
+                        Console.WriteLine("Continue export? (Y/N)");
+                        Console.Write("> ");
 
-                        return;
+                        string input = Console.ReadLine() ?? "";
+
+                        if (!input.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine("Export stopped by user.");
+                            return;
+                        }
                     }
+
+                    currentOffset += (AppSettings.DefaultPageSize - 1);
+                    currentPage++;
                 }
-
-                // IMPORTANT: overlap previous last record with next request's first record
-                currentOffset +=
-                    (AppSettings.DefaultPageSize - 1);
-
-                // Increment visible page counter
-                currentPage++;
             }
 
             Console.WriteLine();
-            Console.WriteLine(
-                "Inbox export completed.");
+            Console.WriteLine("Inbox export completed.");
         }
 
         // Stage 1:
@@ -176,10 +144,20 @@ namespace SalesmessageExporter.Services
 
 
         // Export all messages across ALL inboxes — no inbox ID needed
-        public async Task ExportFullConversationHistoryAsync(string orgName)
+        public async Task ExportFullConversationHistoryAsync(
+            string orgName,
+            int? inboxIdFilter = null,
+            string? fromDate = null)
         {
             Console.WriteLine();
             Console.WriteLine($"Starting FULL conversation export for {orgName}");
+
+            if (inboxIdFilter.HasValue)
+                Console.WriteLine($"Inbox filter: {inboxIdFilter.Value}");
+
+            if (!string.IsNullOrEmpty(fromDate))
+                Console.WriteLine($"Date filter: conversations since {fromDate} (UTC)");
+
             Console.WriteLine();
 
             // Step 1: discover all inboxes (id + name)
@@ -187,6 +165,9 @@ namespace SalesmessageExporter.Services
 
             List<(int Id, string Name)> inboxes =
                 await _apiService.GetAllInboxInfoAsync();
+
+            if (inboxIdFilter.HasValue)
+                inboxes = inboxes.Where(i => i.Id == inboxIdFilter.Value).ToList();
 
             Console.WriteLine($"Found {inboxes.Count} inbox(es).");
             Console.WriteLine();
@@ -200,15 +181,22 @@ namespace SalesmessageExporter.Services
                 Console.WriteLine(
                     $"Collecting conversations for inbox {inboxId} ({inboxName})...");
 
-                List<ConversationIndexEntry> entries =
-                    await _apiService.GetAllConversationInfoAsync(inboxId, inboxName);
-
-                Console.WriteLine($"  {entries.Count} conversations found.");
-
-                foreach (ConversationIndexEntry entry in entries)
+                try
                 {
-                    if (conversationToInbox.TryAdd(entry.ConversationId, inboxId))
-                        indexEntries.Add(entry);
+                    List<ConversationIndexEntry> entries =
+                        await _apiService.GetAllConversationInfoAsync(inboxId, inboxName, fromDate);
+
+                    Console.WriteLine($"  {entries.Count} conversations found.");
+
+                    foreach (ConversationIndexEntry entry in entries)
+                    {
+                        if (conversationToInbox.TryAdd(entry.ConversationId, inboxId))
+                            indexEntries.Add(entry);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  Failed to collect inbox {inboxId} — skipping: {ex.Message}");
                 }
             }
 

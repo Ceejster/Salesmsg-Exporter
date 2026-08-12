@@ -6,10 +6,19 @@ namespace SalesmessageExporter
     {
         static async Task Main(string[] args)
         {
+            // Dev mode: dotnet run -- --dev --inbox 263742 --days 3 --org TestOrg
+            if (args.Contains("--dev"))
+            {
+                await RunDevModeAsync(args);
+                return;
+            }
+
             var menuService = new MenuService();
 
             var (apiService, exportService) =
                 await GetValidatedServicesAsync(menuService);
+
+            using var _ = apiService;
 
             bool running = true;
 
@@ -128,9 +137,13 @@ namespace SalesmessageExporter
                                             string orgName =
                                                 menuService.GetOrganizationName();
 
+                                            string? fromDate =
+                                                menuService.GetDateRangeOption();
+
                                             await exportService
                                                 .ExportFullConversationHistoryAsync(
-                                                    orgName);
+                                                    orgName,
+                                                    fromDate: fromDate);
 
                                             break;
                                         }
@@ -200,6 +213,7 @@ namespace SalesmessageExporter
                     // ---------------------------------
                     case "6":
                         {
+                            apiService.Dispose();
                             (apiService, exportService) =
                                 await GetValidatedServicesAsync(menuService);
 
@@ -223,6 +237,45 @@ namespace SalesmessageExporter
                         }
                 }
             }
+        }
+
+        static async Task RunDevModeAsync(string[] args)
+        {
+            Console.WriteLine("=== DEV MODE ===");
+
+            int? inboxId = ParseIntArg(args, "--inbox");
+            int  days    = ParseIntArg(args, "--days") ?? 3;
+            string org   = ParseStringArg(args, "--org") ?? "DevTest";
+            string fromDate = DateTime.UtcNow.AddDays(-days).ToString("yyyy-MM-dd");
+
+            Console.WriteLine($"Inbox:     {(inboxId.HasValue ? inboxId.Value.ToString() : "all")}");
+            Console.WriteLine($"Days:      {days}  (since {fromDate})");
+            Console.WriteLine($"Org:       {org}");
+            Console.WriteLine();
+
+            var menuService = new MenuService();
+            var (devApi, exportService) = await GetValidatedServicesAsync(menuService);
+
+            using var _ = devApi;
+
+            await exportService.ExportFullConversationHistoryAsync(org, inboxId, fromDate);
+        }
+
+        static int? ParseIntArg(string[] args, string flag)
+        {
+            int idx = Array.IndexOf(args, flag);
+            if (idx >= 0 && idx + 1 < args.Length &&
+                int.TryParse(args[idx + 1], out int val))
+                return val;
+            return null;
+        }
+
+        static string? ParseStringArg(string[] args, string flag)
+        {
+            int idx = Array.IndexOf(args, flag);
+            if (idx >= 0 && idx + 1 < args.Length)
+                return args[idx + 1];
+            return null;
         }
 
         // Prompts for a PAT and loops until a valid one is provided
