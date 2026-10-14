@@ -115,18 +115,20 @@ namespace SalesmessageExporter.Services
                 Console.WriteLine("Select date range:");
                 Console.WriteLine("1. Last 30 days");
                 Console.WriteLine("2. Last 90 days");
-                Console.WriteLine("3. Last 180 days");
-                Console.WriteLine("4. Last 365 days");
-                Console.WriteLine("5. All time");
+                Console.WriteLine("3. Last 120 days");
+                Console.WriteLine("4. Last 180 days");
+                Console.WriteLine("5. Last 365 days");
+                Console.WriteLine("6. All time");
                 Console.Write("> ");
 
                 switch ((Console.ReadLine() ?? "").Trim())
                 {
                     case "1": return DateTime.UtcNow.AddDays(-30).ToString("yyyy-MM-dd");
                     case "2": return DateTime.UtcNow.AddDays(-90).ToString("yyyy-MM-dd");
-                    case "3": return DateTime.UtcNow.AddDays(-180).ToString("yyyy-MM-dd");
-                    case "4": return DateTime.UtcNow.AddDays(-365).ToString("yyyy-MM-dd");
-                    case "5": return null;
+                    case "3": return DateTime.UtcNow.AddDays(-120).ToString("yyyy-MM-dd");
+                    case "4": return DateTime.UtcNow.AddDays(-180).ToString("yyyy-MM-dd");
+                    case "5": return DateTime.UtcNow.AddDays(-365).ToString("yyyy-MM-dd");
+                    case "6": return null;
                     default:
                         Console.WriteLine("Invalid option. Try again.");
                         break;

@@ -26,8 +26,8 @@ namespace SalesmessageExporter
             {
                 Console.WriteLine();
                 Console.WriteLine("=== Salesmessage Export Tool ===");
-                Console.WriteLine("1. Export Inbox Conversations");
-                Console.WriteLine("2. Export Messages");
+                Console.WriteLine("1. Export Single Inbox Conversations (requires inbox ID)");
+                Console.WriteLine("2. Export Messages (all inboxes)");
                 Console.WriteLine("3. Generate Credit Report");
                 Console.WriteLine("4. Export Members");
                 Console.WriteLine("5. Export Call History");
@@ -202,8 +202,11 @@ namespace SalesmessageExporter
                             string orgName =
                                 menuService.GetOrganizationName();
 
+                            string? fromDate =
+                                menuService.GetDateRangeOption();
+
                             await exportService
-                                .ExportCallHistoryAsync(orgName);
+                                .ExportCallHistoryAsync(orgName, fromDate);
 
                             break;
                         }

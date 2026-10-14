@@ -18,6 +18,12 @@
         public const int MaxRetryAttempts = 3;
         public const int RetryDelayBaseSeconds = 5;
 
+        // 500 read req/hr = 1 per 7.2s — use 8s for safe headroom
+        public const int DelayBetweenExportsMs = 8000;
+
+        // Wait 60s after a 429 to let the rate limit window recover
+        public const int RateLimitRetrySeconds = 60;
+
         // -------------------------
         // ENDPOINTS
         // -------------------------
@@ -34,9 +40,8 @@
 
         public const string UsersEndpoint = "users";
 
-        // Token refresh — full URL because refresh lives on v2.2, not v2.3
         public const string TokenRefreshEndpoint =
-            "https://api.salesmessage.com/pub/v2.2/oauth/personal-token/refresh";
+            "https://api.salesmessage.com/pub/v2.3/oauth/personal-token/refresh";
 
         public const int TokenRefreshWarningMinutes  = 30;
         public const int TokenRefreshThresholdMinutes = 15;

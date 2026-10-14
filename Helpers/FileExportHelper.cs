@@ -25,6 +25,29 @@ namespace SalesmessageExporter.Helpers
                 json);
         }
 
+        public static bool ConversationFileExists(string orgName, long conversationId, int inboxId = 0)
+        {
+            string folder = inboxId > 0
+                ? Path.Combine(GetOrgFolder(orgName), $"Inbox_{inboxId}")
+                : GetOrgFolder(orgName);
+
+            return File.Exists(Path.Combine(folder, $"Conversation_{conversationId}.json"));
+        }
+
+        // TODO: Remove once resume mode confirmed working
+        public static string? GetCheckpointPath(string orgName)
+        {
+            string path = Path.Combine(GetOrgFolder(orgName), "ConversationIds.json");
+            return File.Exists(path) ? path : null;
+        }
+
+        // TODO: Remove once resume mode confirmed working
+        public static string? GetIndexCsvPath(string orgName)
+        {
+            string path = Path.Combine(GetOrgFolder(orgName), "ConversationIndex.csv");
+            return File.Exists(path) ? path : null;
+        }
+
         // Saves all discovered conversation IDs into a single JSON file
         public static async Task SaveConversationIdsAsync(
             string json,
@@ -51,6 +74,16 @@ namespace SalesmessageExporter.Helpers
 
             await File.WriteAllTextAsync(
                 Path.Combine(folder, $"Conversation_{conversationId}.json"),
+                json);
+        }
+
+        // Saves the call history inbox access summary
+        public static async Task SaveCallHistoryAccessSummaryAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "CallHistoryAccessSummary.json"),
                 json);
         }
 

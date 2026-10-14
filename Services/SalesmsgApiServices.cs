@@ -303,18 +303,41 @@ namespace SalesmessageExporter.Services
                     attempt < AppSettings.MaxRetryAttempts &&
                     (ex is TaskCanceledException ||
                      (ex is HttpRequestException httpEx &&
-                      (httpEx.StatusCode == null ||          // network failure
-                       (int)httpEx.StatusCode >= 500))))     // 5xx server errors (incl. 504)
+                      (httpEx.StatusCode == null ||
+                       (int)httpEx.StatusCode >= 500 ||
+                       httpEx.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
+                       httpEx.StatusCode == System.Net.HttpStatusCode.Unauthorized))))
                 {
-                    int delaySeconds =
-                        AppSettings.RetryDelayBaseSeconds * attempt;
+                    bool isAuthFailure =
+                        ex is HttpRequestException h &&
+                        h.StatusCode == System.Net.HttpStatusCode.Unauthorized;
 
-                    Console.WriteLine(
-                        $"Request failed (attempt {attempt}/{AppSettings.MaxRetryAttempts}): " +
-                        $"{ex.Message}. Retrying in {delaySeconds}s...");
+                    bool isRateLimit =
+                        ex is HttpRequestException r &&
+                        r.StatusCode == System.Net.HttpStatusCode.TooManyRequests;
 
-                    await Task.Delay(
-                        TimeSpan.FromSeconds(delaySeconds));
+                    if (isAuthFailure)
+                    {
+                        Console.WriteLine(
+                            $"\n[{(ex is HttpRequestException he ? (int?)he.StatusCode : null)} detected mid-run — attempting token refresh...]");
+                        await RefreshTokenAsync();
+                    }
+                    else if (isRateLimit)
+                    {
+                        Console.WriteLine(
+                            $"\n[429 rate limit — waiting {AppSettings.RateLimitRetrySeconds}s before retry...]");
+                        await Task.Delay(TimeSpan.FromSeconds(AppSettings.RateLimitRetrySeconds));
+                    }
+                    else
+                    {
+                        int delaySeconds = AppSettings.RetryDelayBaseSeconds * attempt;
+
+                        Console.WriteLine(
+                            $"Request failed (attempt {attempt}/{AppSettings.MaxRetryAttempts}): " +
+                            $"{ex.Message}. Retrying in {delaySeconds}s...");
+
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                    }
                 }
             }
         }
