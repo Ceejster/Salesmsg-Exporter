@@ -1,97 +1,202 @@
-﻿using System.Text.RegularExpressions;
+using System.Text;
+using System.Text.RegularExpressions;
+using SalesmessageExporter.Models;
 
 namespace SalesmessageExporter.Helpers
 {
     public static class FileExportHelper
     {
-        // Folder where exports are stored
-        private static readonly string ExportFolder = "Exports";
+        // Root export folder: ~/Salesmsg/
+        private static readonly string ExportRoot =
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Salesmsg");
 
-        // Saves one formatted JSON export page to disk
+        // Saves one formatted JSON inbox-conversations page to disk
         public static async Task SaveJsonPageAsync(
             string json,
             string orgName,
             int pageNumber)
         {
-            // Ensure export folder exists
-            Directory.CreateDirectory(ExportFolder);
+            string folder = GetOrgFolder(orgName);
 
-            // Remove invalid filename characters
-            string safeOrgName =
-                SanitizeFileName(orgName);
-
-            // Example:
-            // AktivateInboxPage1.json
-            string fileName =
-                $"{safeOrgName}InboxPage{pageNumber}.json";
-
-            // Full path to save file
-            string fullPath =
-                Path.Combine(ExportFolder, fileName);
-
-            // Write JSON to disk
             await File.WriteAllTextAsync(
-                fullPath,
+                Path.Combine(folder, $"InboxPage{pageNumber}.json"),
                 json);
         }
 
-        // NEW:
-        // Saves all discovered conversation IDs
-        // into a single JSON file.
+        public static bool ConversationFileExists(string orgName, long conversationId, int inboxId = 0)
+        {
+            string folder = inboxId > 0
+                ? Path.Combine(GetOrgFolder(orgName), $"Inbox_{inboxId}")
+                : GetOrgFolder(orgName);
+
+            return File.Exists(Path.Combine(folder, $"Conversation_{conversationId}.json"));
+        }
+
+        // TODO: Remove once resume mode confirmed working
+        public static string? GetCheckpointPath(string orgName)
+        {
+            string path = Path.Combine(GetOrgFolder(orgName), "ConversationIds.json");
+            return File.Exists(path) ? path : null;
+        }
+
+        // TODO: Remove once resume mode confirmed working
+        public static string? GetIndexCsvPath(string orgName)
+        {
+            string path = Path.Combine(GetOrgFolder(orgName), "ConversationIndex.csv");
+            return File.Exists(path) ? path : null;
+        }
+
+        // Saves all discovered conversation IDs into a single JSON file
         public static async Task SaveConversationIdsAsync(
             string json,
             string orgName)
         {
-            // Ensure export folder exists
-            Directory.CreateDirectory(ExportFolder);
+            string folder = GetOrgFolder(orgName);
 
-            // Remove invalid filename characters
-            string safeOrgName =
-                SanitizeFileName(orgName);
-
-            // Example:
-            // AktivateConversationIds.json
-            string fileName =
-                $"{safeOrgName}ConversationIds.json";
-
-            // Full path to save file
-            string fullPath =
-                Path.Combine(ExportFolder, fileName);
-
-            // Write JSON to disk
             await File.WriteAllTextAsync(
-                fullPath,
+                Path.Combine(folder, "ConversationIds.json"),
                 json);
         }
 
-        // Removes invalid Windows filename characters
-        private static string SanitizeFileName(
-            string fileName)
-        {
-            // Replace anything not valid for filenames
-            return Regex.Replace(
-                fileName,
-                @"[^\w\d\-]",
-                "");
-        }
-
+        // Saves a single conversation's messages
+        // When inboxId > 0 the file is placed in an Inbox_{id} subfolder
         public static async Task SaveConversationAsync(
-    string json,
-    string orgName,
-    long conversationId)
+            string json,
+            string orgName,
+            long conversationId,
+            int inboxId = 0)
         {
-            Directory.CreateDirectory(ExportFolder);
+            string folder = inboxId > 0
+                ? GetInboxFolder(orgName, inboxId)
+                : GetOrgFolder(orgName);
 
-            string safeOrgName = SanitizeFileName(orgName);
-
-            string fileName =
-                $"{safeOrgName}_Conversation_{conversationId}.json";
-
-            string fullPath =
-                Path.Combine(ExportFolder, fileName);
-
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, $"Conversation_{conversationId}.json"),
+                json);
         }
 
+        // Saves the call history inbox access summary
+        public static async Task SaveCallHistoryAccessSummaryAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "CallHistoryAccessSummary.json"),
+                json);
+        }
+
+        // Saves the call history export
+        public static async Task SaveCallHistoryAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "CallHistory.json"),
+                json);
+        }
+
+        // Saves the member/user export as JSON
+        public static async Task SaveMembersAsync(string json, string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "Members.json"),
+                json);
+        }
+
+        // Saves a CSV mapping conversation IDs to contact identifiers
+        public static async Task SaveConversationIndexCsvAsync(
+            IEnumerable<ConversationIndexEntry> entries,
+            string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            var sb = new StringBuilder();
+            sb.AppendLine(
+                "conversation_id,inbox_id,inbox_name,contact_name,phone,email");
+
+            foreach (ConversationIndexEntry entry in entries)
+            {
+                sb.AppendLine(
+                    $"{entry.ConversationId}," +
+                    $"{entry.InboxId}," +
+                    $"{CsvEscape(entry.InboxName)}," +
+                    $"{CsvEscape(entry.ContactName)}," +
+                    $"{CsvEscape(entry.ContactPhone)}," +
+                    $"{CsvEscape(entry.ContactEmail)}");
+            }
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "ConversationIndex.csv"),
+                sb.ToString());
+        }
+
+        // Saves the per-inbox message-level credit detail
+        public static async Task SaveInboxCreditDetailAsync(
+            string json,
+            string orgName,
+            int inboxId)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, $"Inbox_{inboxId}_CreditDetail.json"),
+                json);
+        }
+
+        // Saves the overall credit usage summary
+        public static async Task SaveCreditReportAsync(
+            string json,
+            string orgName)
+        {
+            string folder = GetOrgFolder(orgName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(folder, "CreditReport.json"),
+                json);
+        }
+
+        // Returns ~/Salesmsg/{orgName}/Inbox_{inboxId}/ and ensures it exists
+        private static string GetInboxFolder(string orgName, int inboxId)
+        {
+            string folder = Path.Combine(
+                GetOrgFolder(orgName),
+                $"Inbox_{inboxId}");
+
+            Directory.CreateDirectory(folder);
+
+            return folder;
+        }
+
+        // Returns ~/Salesmsg/{orgName}/ and ensures it exists
+        private static string GetOrgFolder(string orgName)
+        {
+            string folder = Path.Combine(
+                ExportRoot,
+                SanitizeFileName(orgName));
+
+            Directory.CreateDirectory(folder);
+
+            return folder;
+        }
+
+        private static string SanitizeFileName(string fileName)
+        {
+            return Regex.Replace(fileName, @"[^\w\d\-]", "");
+        }
+
+        private static string CsvEscape(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+
+            if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+                return $"\"{value.Replace("\"", "\"\"")}\"";
+
+            return value;
+        }
     }
 }

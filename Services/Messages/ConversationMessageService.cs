@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 
 namespace SalesmessageExporter.Services.Messages
 {
@@ -6,8 +6,6 @@ namespace SalesmessageExporter.Services.Messages
     /// Salesmessage message pagination.
     public class ConversationMessageService
     {
-        private readonly HttpClient _httpClient;
-
         private readonly SalesmessageApiService _apiService;
 
         public ConversationMessageService(SalesmessageApiService apiService)
@@ -21,52 +19,32 @@ namespace SalesmessageExporter.Services.Messages
         {
             var allMessages = new List<JsonElement>();
 
-            int currentPage = 1;
-            int lastPage = 1;
+            List<string> pages =
+                await _apiService.GetAllMessagePagesRawAsync(conversationId);
 
-            do
+            int pageNumber = 1;
+
+            foreach (string pageJson in pages)
             {
-                Console.WriteLine(
-                    $"Conversation {conversationId} - Page {currentPage}");
-
-                string endpoint =
-                    $"/messages/{conversationId}/paginated?per_page=15&page={currentPage}";
-
-                var response = await _httpClient.GetAsync(endpoint);
-
-                response.EnsureSuccessStatusCode();
-
-                string json =
-                    await response.Content.ReadAsStringAsync();
-
                 using JsonDocument document =
-                    JsonDocument.Parse(json);
+                    JsonDocument.Parse(pageJson);
 
-                JsonElement root =
-                    document.RootElement;
+                JsonElement root = document.RootElement;
 
-                // Get message array
-                JsonElement data =
-                    root.GetProperty("data");
+                if (!root.TryGetProperty("data", out JsonElement data))
+                    continue;
 
                 foreach (JsonElement message in data.EnumerateArray())
                 {
                     allMessages.Add(message.Clone());
                 }
 
-                // Read pagination metadata
-                JsonElement meta =
-                    root.GetProperty("meta");
-
-                lastPage =
-                    meta.GetProperty("last_page").GetInt32();
-
                 Console.WriteLine(
-                    $"Retrieved page {currentPage} of {lastPage}");
+                    $"Conversation {conversationId} — " +
+                    $"page {pageNumber} of {pages.Count}");
 
-                currentPage++;
-
-            } while (currentPage <= lastPage);
+                pageNumber++;
+            }
 
             Console.WriteLine(
                 $"Conversation {conversationId} complete. " +

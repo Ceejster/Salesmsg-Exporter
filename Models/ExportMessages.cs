@@ -10,9 +10,23 @@
 
         public string Type { get; set; }
 
+        public string Direction { get; set; }
+
         public string Body { get; set; }
 
         public bool Automated { get; set; }
+
+        public string SentAt { get; set; }
+
+        public string ReceivedAt { get; set; }
+
+        public string DeliveredAt { get; set; }
+
+        public string FailedAt { get; set; }
+
+        public string CreatedAt { get; set; }
+
+        public string Source { get; set; }
 
         public ExportMessageRecord Record { get; set; }
 
@@ -79,6 +93,13 @@
 
     public class ExportMessageUser
     {
+        public long Id { get; set; }
+
+        public string FullName { get; set; }
+
+        public string Email { get; set; }
+
+        public string FormattedNumber { get; set; }
     }
 
     public class ExportMedia

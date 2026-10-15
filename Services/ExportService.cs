@@ -14,115 +14,83 @@ namespace SalesmessageExporter.Services
             _apiService = apiService;
         }
 
-        // Main inbox export loop
+        // Main inbox export loop — fetches open then closed conversations
         public async Task ExportInboxAsync(
             int inboxId,
             string orgName,
             int startOffset = 0,
             int startPage = 1)
         {
-            int currentOffset = startOffset;
-
-            // User-facing page number
-            int currentPage = startPage;
-
-            bool hasMoreRecords = true;
-
-            Console.WriteLine(
-                $"Starting export for {orgName}");
-
-            Console.WriteLine(
-                $"Starting from page {currentPage}");
-
+            Console.WriteLine($"Starting export for {orgName}");
             Console.WriteLine();
 
-            while (hasMoreRecords)
+            int currentPage = startPage;
+
+            foreach (string filter in new[] { "open", "closed", "outbound" })
             {
-                Console.WriteLine(
-                    $"Fetching Page {currentPage} " +
-                    $"(Offset {currentOffset})...");
+                Console.WriteLine($"--- Fetching {filter} conversations ---");
 
-                // Pull raw JSON from API
-                string rawJson =
-                    await _apiService.GetConversationsPageRawAsync(
-                        inboxId,
-                        currentOffset);
+                int currentOffset = startOffset;
+                bool hasMoreRecords = true;
 
-                // Convert raw JSON into clean export objects
-                List<ExportConversation> conversations =
-                    ConversationMapper.MapConversations(rawJson);
-
-                // Convert cleaned objects back into readable JSON
-                string formattedJson =
-                    JsonSerializer.Serialize(
-                        conversations,
-                        new JsonSerializerOptions
-                        {
-                            WriteIndented = true
-                        });
-
-                // Save export file
-                await FileExportHelper.SaveJsonPageAsync(
-                    formattedJson,
-                    orgName,
-                    currentPage);
-
-                Console.WriteLine(
-                    $"Saved Page {currentPage}.");
-
-                int returnedRecordCount =
-                    conversations.Count;
-
-                Console.WriteLine(
-                    $"Returned records: {returnedRecordCount}");
-
-                // If fewer than page size returned, we've reached the end
-                hasMoreRecords =
-                    returnedRecordCount ==
-                    AppSettings.DefaultPageSize;
-
-                Console.WriteLine(
-                    $"Has more records: {hasMoreRecords}");
-
-                // Pause every checkpoint interval
-                if (currentPage %
-                    AppSettings.PageCheckpoint == 0)
+                while (hasMoreRecords)
                 {
-                    Console.WriteLine();
                     Console.WriteLine(
-                        $"Checkpoint reached at Page {currentPage}");
+                        $"Fetching Page {currentPage} " +
+                        $"(Offset {currentOffset})...");
 
-                    Console.WriteLine(
-                        "Continue export? (Y/N)");
+                    string rawJson =
+                        await _apiService.GetConversationsPageRawAsync(
+                            inboxId,
+                            currentOffset,
+                            filter);
 
-                    Console.Write("> ");
+                    List<ExportConversation> conversations =
+                        ConversationMapper.MapConversations(rawJson);
 
-                    string input =
-                        Console.ReadLine() ?? "";
+                    string formattedJson =
+                        JsonSerializer.Serialize(
+                            conversations,
+                            new JsonSerializerOptions { WriteIndented = true });
 
-                    if (!input.Equals(
-                        "Y",
-                        StringComparison.OrdinalIgnoreCase))
+                    await FileExportHelper.SaveJsonPageAsync(
+                        formattedJson,
+                        orgName,
+                        currentPage);
+
+                    Console.WriteLine($"Saved Page {currentPage}.");
+
+                    int returnedRecordCount = conversations.Count;
+
+                    Console.WriteLine($"Returned records: {returnedRecordCount}");
+
+                    hasMoreRecords = returnedRecordCount == AppSettings.DefaultPageSize;
+
+                    Console.WriteLine($"Has more records: {hasMoreRecords}");
+
+                    if (currentPage % AppSettings.PageCheckpoint == 0)
                     {
                         Console.WriteLine();
-                        Console.WriteLine(
-                            "Export stopped by user.");
+                        Console.WriteLine($"Checkpoint reached at Page {currentPage}");
+                        Console.WriteLine("Continue export? (Y/N)");
+                        Console.Write("> ");
 
-                        return;
+                        string input = Console.ReadLine() ?? "";
+
+                        if (!input.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine("Export stopped by user.");
+                            return;
+                        }
                     }
+
+                    currentOffset += (AppSettings.DefaultPageSize - 1);
+                    currentPage++;
                 }
-
-                // IMPORTANT: overlap previous last record with next request's first record
-                currentOffset +=
-                    (AppSettings.DefaultPageSize - 1);
-
-                // Increment visible page counter
-                currentPage++;
             }
 
             Console.WriteLine();
-            Console.WriteLine(
-                "Inbox export completed.");
+            Console.WriteLine("Inbox export completed.");
         }
 
         // Stage 1:
@@ -175,13 +143,244 @@ namespace SalesmessageExporter.Services
         }
 
 
-        public async Task ExportFullConversationHistoryAsync( int inboxId, string orgName)
+        // Export all messages across ALL inboxes — no inbox ID needed
+        public async Task ExportFullConversationHistoryAsync(
+            string orgName,
+            int? inboxIdFilter = null,
+            string? fromDate = null)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Starting FULL conversation export for {orgName}");
+
+            if (inboxIdFilter.HasValue)
+                Console.WriteLine($"Inbox filter: {inboxIdFilter.Value}");
+
+            if (!string.IsNullOrEmpty(fromDate))
+                Console.WriteLine($"Date filter: conversations since {fromDate} (UTC)");
+
+            Console.WriteLine();
+
+            // Step 1: discover all inboxes (id + name)
+            Console.WriteLine("Fetching inboxes...");
+
+            List<(int Id, string Name)> inboxes =
+                await _apiService.GetAllInboxInfoAsync();
+
+            if (inboxIdFilter.HasValue)
+                inboxes = inboxes.Where(i => i.Id == inboxIdFilter.Value).ToList();
+
+            Console.WriteLine($"Found {inboxes.Count} inbox(es).");
+            Console.WriteLine();
+
+            // TODO: Remove resume block once confirmed working
+            var conversationToInbox = new Dictionary<long, int>();
+            var indexEntries        = new List<ConversationIndexEntry>();
+
+            bool resumed = false;
+
+            // TODO: Remove resume block once confirmed working
+            string? checkpointPath = FileExportHelper.GetCheckpointPath(orgName);
+            string? csvPath        = FileExportHelper.GetIndexCsvPath(orgName);
+
+            if (checkpointPath != null || csvPath != null)
+            {
+                Console.WriteLine("Existing export data found.");
+                Console.WriteLine("Resume and skip ID collection? (Y/N)");
+                Console.Write("> ");
+
+                string answer = Console.ReadLine() ?? "";
+
+                if (answer.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Prefer ConversationIds.json, fall back to CSV for IDs
+                    if (checkpointPath != null)
+                    {
+                        string checkpointJson = await File.ReadAllTextAsync(checkpointPath);
+                        List<long> savedIds =
+                            System.Text.Json.JsonSerializer.Deserialize<List<long>>(checkpointJson)
+                            ?? new List<long>();
+
+                        foreach (long id in savedIds)
+                            conversationToInbox.TryAdd(id, 0);
+                    }
+
+                    // Rebuild conversationToInbox + indexEntries from CSV
+                    if (csvPath != null)
+                    {
+                        string[] csvLines = await File.ReadAllLinesAsync(csvPath);
+                        foreach (string line in csvLines.Skip(1))
+                        {
+                            string[] parts = line.Split(',');
+                            if (parts.Length >= 2 &&
+                                long.TryParse(parts[0], out long cid) &&
+                                int.TryParse(parts[1], out int iid))
+                            {
+                                conversationToInbox[cid] = iid; // CSV wins for inbox mapping
+                            }
+                        }
+                    }
+
+                    Console.WriteLine(
+                        $"Resumed — {conversationToInbox.Count} conversations loaded.");
+
+                    resumed = true;
+                }
+            }
+
+            if (!resumed)
+            {
+                // Step 2: collect conversation IDs + contact info per inbox
+                foreach ((int inboxId, string inboxName) in inboxes)
+                {
+                    Console.WriteLine(
+                        $"Collecting conversations for inbox {inboxId} ({inboxName})...");
+
+                    try
+                    {
+                        List<ConversationIndexEntry> entries =
+                            await _apiService.GetAllConversationInfoAsync(inboxId, inboxName, fromDate);
+
+                        Console.WriteLine($"  {entries.Count} conversations found.");
+
+                        foreach (ConversationIndexEntry entry in entries)
+                        {
+                            if (conversationToInbox.TryAdd(entry.ConversationId, inboxId))
+                                indexEntries.Add(entry);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  Failed to collect inbox {inboxId} — skipping: {ex.Message}");
+                    }
+                }
+            }
+
+            List<long> idList = conversationToInbox.Keys.ToList();
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Total unique conversations: {idList.Count}");
+            Console.WriteLine();
+
+            // Step 3: save IDs to disk immediately as a checkpoint
+            string idsJson = JsonSerializer.Serialize(
+                idList,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveConversationIdsAsync(idsJson, orgName);
+
+            Console.WriteLine("Conversation IDs saved to file.");
+            Console.WriteLine();
+
+            // Step 4: export messages and accumulate credits per inbox
+            var inboxSummaries = new Dictionary<int, InboxCreditSummary>();
+
+            foreach ((int inboxId, string inboxName) in inboxes)
+            {
+                inboxSummaries[inboxId] = new InboxCreditSummary
+                {
+                    InboxId = inboxId,
+                    InboxName = inboxName
+                };
+            }
+
+            int index = 1;
+            int failed = 0;
+
+            foreach (long conversationId in idList)
+            {
+                int inboxId =
+                    conversationToInbox.TryGetValue(conversationId, out int cid)
+                        ? cid : 0;
+
+                Console.WriteLine(
+                    $"[{index}/{idList.Count}] Exporting conversation {conversationId}");
+
+                // Skip conversations already exported — allows safe resume after crash
+                if (FileExportHelper.ConversationFileExists(orgName, conversationId, inboxId))
+                {
+                    Console.WriteLine(
+                        $"[{index}/{idList.Count}] Skipping {conversationId} — already exported");
+                    index++;
+                    continue;
+                }
+
+                try
+                {
+                    // 500 read req/hr limit — delay between each conversation export
+                    await Task.Delay(AppSettings.DelayBetweenExportsMs);
+
+                    (int smsMessages, int smsSegments, int mmsMessages, int callCount, int callCredits) =
+                        await ExportSingleConversationAsync(
+                            conversationId,
+                            orgName,
+                            inboxId);
+
+                    if (inboxId > 0 &&
+                        inboxSummaries.TryGetValue(inboxId, out InboxCreditSummary summary))
+                    {
+                        summary.OutboundSmsMessages += smsMessages;
+                        summary.OutboundSmsSegments += smsSegments;
+                        summary.OutboundMmsMessages += mmsMessages;
+                        summary.OutboundCallCount   += callCount;
+                        summary.OutboundCallCredits += callCredits;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"  Failed conversation {conversationId}: {ex.Message}");
+                }
+
+                index++;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"FULL EXPORT COMPLETE — " +
+                $"{idList.Count - failed}/{idList.Count} conversations exported.");
+
+            if (failed > 0)
+                Console.WriteLine(
+                    $"{failed} conversation(s) failed — see log above.");
+
+            // Step 5: build and save credit report
+            var report = new CreditReport
+            {
+                OrgName = orgName,
+                GeneratedAt = DateTime.UtcNow.ToString("O"),
+                Inboxes = inboxSummaries.Values
+                    .OrderBy(i => i.InboxId)
+                    .ToList()
+            };
+
+            string reportJson = JsonSerializer.Serialize(
+                report,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveCreditReportAsync(reportJson, orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Credit report saved — " +
+                $"grand total: {report.GrandTotalCredits} credits.");
+
+            // Save conversation index CSV
+            await FileExportHelper.SaveConversationIndexCsvAsync(
+                indexEntries, orgName);
+
+            Console.WriteLine("Conversation index CSV saved.");
+        }
+
+        // Single-inbox overload kept for option 1 (inbox conversations export)
+        public async Task ExportFullConversationHistoryAsync(int inboxId, string orgName)
         {
             Console.WriteLine();
             Console.WriteLine($"Starting FULL conversation export for {orgName}");
             Console.WriteLine();
 
-            // Step 1: get all conversation IDs
+            // Step 1: collect all conversation IDs
             HashSet<long> conversationIds =
                 await _apiService.GetAllConversationIdsAsync(inboxId);
 
@@ -190,26 +389,59 @@ namespace SalesmessageExporter.Services
             Console.WriteLine($"Total conversations: {idList.Count}");
             Console.WriteLine();
 
-            int index = 1;
+            // Step 2: save IDs to disk immediately so we have a checkpoint
+            // if anything goes wrong during the export loop
+            string idsJson = JsonSerializer.Serialize(
+                idList,
+                new JsonSerializerOptions { WriteIndented = true });
 
-            // Step 2: export each conversation
+            await FileExportHelper.SaveConversationIdsAsync(idsJson, orgName);
+
+            Console.WriteLine("Conversation IDs saved to file.");
+            Console.WriteLine();
+
+            int index = 1;
+            int failed = 0;
+
+            // Step 3: export messages for each conversation
             foreach (long conversationId in idList)
             {
                 Console.WriteLine(
                     $"[{index}/{idList.Count}] Exporting conversation {conversationId}");
 
-                await ExportSingleConversationAsync(
-                    conversationId,
-                    orgName);
+                try
+                {
+                    await ExportSingleConversationAsync(
+                        conversationId,
+                        orgName,
+                        inboxId);
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine(
+                        $"  Failed conversation {conversationId}: {ex.Message}");
+                }
 
                 index++;
             }
 
             Console.WriteLine();
-            Console.WriteLine("FULL EXPORT COMPLETE");
+            Console.WriteLine(
+                $"FULL EXPORT COMPLETE — " +
+                $"{idList.Count - failed}/{idList.Count} conversations exported.");
+
+            if (failed > 0)
+                Console.WriteLine(
+                    $"{failed} conversation(s) failed — see log above.");
         }
 
-        private async Task ExportSingleConversationAsync(long conversationId, string orgName)
+        // Returns per-type credit counts for accumulation into InboxCreditSummary
+        private async Task<(int smsMessages, int smsSegments, int mmsMessages, int callCount, int callCredits)>
+            ExportSingleConversationAsync(
+                long conversationId,
+                string orgName,
+                int inboxId = 0)
         {
             int page = 1;
             bool hasMorePages = true;
@@ -235,6 +467,51 @@ namespace SalesmessageExporter.Services
                 page++;
             }
 
+            int smsMessages = 0;
+            int smsSegments = 0;
+            int mmsMessages = 0;
+            int callCount   = 0;
+            int callCredits = 0;
+
+            foreach (ExportMessage message in allMessages)
+            {
+                bool isReceived = string.Equals(
+                    message.Status, "received",
+                    StringComparison.OrdinalIgnoreCase);
+
+                bool isFailed = string.Equals(
+                    message.Status, "failed",
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (isReceived || isFailed)
+                    continue;
+
+                string type = message.Type?.ToLower() ?? "";
+
+                if (type == "sms")
+                {
+                    smsMessages++;
+                    smsSegments +=
+                        CreditCalculator.CalculateSmsSegments(
+                            message.Body ?? "");
+                }
+                else if (type == "mms")
+                {
+                    mmsMessages++;
+                }
+                else if (type == "call")
+                {
+                    int duration = message.Record?.Duration ?? 0;
+                    int credits  = CreditCalculator.CalculateCallCredits(duration);
+
+                    if (credits > 0)
+                    {
+                        callCount++;
+                        callCredits += credits;
+                    }
+                }
+            }
+
             var exportObject = new
             {
                 conversation_id = conversationId,
@@ -246,15 +523,15 @@ namespace SalesmessageExporter.Services
             string json =
                 JsonSerializer.Serialize(
                     exportObject,
-                    new JsonSerializerOptions
-                    {
-                        WriteIndented = true
-                    });
+                    new JsonSerializerOptions { WriteIndented = true });
 
             await FileExportHelper.SaveConversationAsync(
                 json,
                 orgName,
-                conversationId);
+                conversationId,
+                inboxId);
+
+            return (smsMessages, smsSegments, mmsMessages, callCount, callCredits);
         }
 
         public async Task ExportSingleConversationByIdAsync(long conversationId, string orgName)
@@ -311,5 +588,390 @@ namespace SalesmessageExporter.Services
             Console.WriteLine();
             Console.WriteLine("Conversation list export complete.");
         }
+
+        // Lightweight credit report — fetches messages but saves only credit
+        // detail per inbox, not full conversation files.
+        public async Task GenerateCreditReportAsync(string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Generating credit report for {orgName}");
+            Console.WriteLine();
+
+            Console.WriteLine("Fetching inboxes...");
+
+            List<(int Id, string Name)> inboxes =
+                await _apiService.GetAllInboxInfoAsync();
+
+            Console.WriteLine($"Found {inboxes.Count} inbox(es).");
+            Console.WriteLine();
+
+            var creditReport = new CreditReport
+            {
+                OrgName = orgName,
+                GeneratedAt = DateTime.UtcNow.ToString("O")
+            };
+
+            var allIndexEntries = new List<ConversationIndexEntry>();
+
+            foreach ((int inboxId, string inboxName) in inboxes)
+            {
+                Console.WriteLine(
+                    $"Processing inbox {inboxId} ({inboxName})...");
+
+                List<ConversationIndexEntry> inboxEntries =
+                    await _apiService.GetAllConversationInfoAsync(inboxId, inboxName);
+
+                allIndexEntries.AddRange(inboxEntries);
+
+                List<long> idList = inboxEntries
+                    .Select(e => e.ConversationId)
+                    .Distinct()
+                    .ToList();
+
+                Console.WriteLine(
+                    $"  {idList.Count} conversations");
+
+                var summary = new InboxCreditSummary
+                {
+                    InboxId   = inboxId,
+                    InboxName = inboxName
+                };
+
+                var detail = new InboxCreditDetail
+                {
+                    InboxId       = inboxId,
+                    InboxName     = inboxName,
+                    Conversations = new List<ConversationCreditEntry>()
+                };
+
+                int convIndex = 1;
+
+                foreach (long conversationId in idList)
+                {
+                    Console.Write(
+                        $"\r  [{convIndex}/{idList.Count}] " +
+                        $"conversation {conversationId}     ");
+
+                    convIndex++;
+
+                    try
+                    {
+                        List<string> pages =
+                            await _apiService.GetAllMessagePagesRawAsync(
+                                conversationId);
+
+                        var convEntry = new ConversationCreditEntry
+                        {
+                            ConversationId = conversationId,
+                            Messages       = new List<MessageCreditEntry>()
+                        };
+
+                        foreach (string pageJson in pages)
+                        {
+                            List<ExportMessage> messages =
+                                MessageMapper.MapMessages(pageJson);
+
+                            foreach (ExportMessage message in messages)
+                            {
+                                bool isReceived = string.Equals(
+                                    message.Status, "received",
+                                    StringComparison.OrdinalIgnoreCase);
+
+                                bool isFailed = string.Equals(
+                                    message.Status, "failed",
+                                    StringComparison.OrdinalIgnoreCase);
+
+                                if (isReceived || isFailed)
+                                    continue;
+
+                                string type = message.Type?.ToLower() ?? "";
+                                int credits  = 0;
+
+                                if (type == "sms")
+                                {
+                                    credits = CreditCalculator.CalculateSmsSegments(
+                                        message.Body ?? "");
+
+                                    summary.OutboundSmsMessages++;
+                                    summary.OutboundSmsSegments += credits;
+                                }
+                                else if (type == "mms")
+                                {
+                                    credits = 2;
+                                    summary.OutboundMmsMessages++;
+                                }
+                                else if (type == "call")
+                                {
+                                    int duration = message.Record?.Duration ?? 0;
+                                    credits = CreditCalculator.CalculateCallCredits(
+                                        duration);
+
+                                    if (credits > 0)
+                                    {
+                                        summary.OutboundCallCount++;
+                                        summary.OutboundCallCredits += credits;
+                                    }
+                                }
+
+                                if (credits > 0)
+                                {
+                                    convEntry.Messages.Add(new MessageCreditEntry
+                                    {
+                                        MessageId = message.Id,
+                                        Type      = message.Type,
+                                        SentAt    = message.SentAt,
+                                        Credits   = credits
+                                    });
+                                }
+                            }
+                        }
+
+                        convEntry.TotalCredits =
+                            convEntry.Messages.Sum(m => m.Credits);
+
+                        if (convEntry.Messages.Count > 0)
+                            detail.Conversations.Add(convEntry);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"\n  Failed conversation {conversationId}: " +
+                            $"{ex.Message}");
+                    }
+                }
+
+                Console.WriteLine();
+
+                string detailJson = JsonSerializer.Serialize(
+                    detail,
+                    new JsonSerializerOptions { WriteIndented = true });
+
+                await FileExportHelper.SaveInboxCreditDetailAsync(
+                    detailJson, orgName, inboxId);
+
+                creditReport.Inboxes.Add(summary);
+
+                Console.WriteLine(
+                    $"  Inbox {inboxId} — {summary.TotalCredits} credits " +
+                    $"({summary.OutboundSmsSegments} SMS, " +
+                    $"{summary.OutboundMmsMessages} MMS, " +
+                    $"{summary.OutboundCallCredits} call)");
+
+                Console.WriteLine();
+            }
+
+            string reportJson = JsonSerializer.Serialize(
+                creditReport,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveCreditReportAsync(reportJson, orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Credit report complete — " +
+                $"grand total: {creditReport.GrandTotalCredits} credits");
+
+            await FileExportHelper.SaveConversationIndexCsvAsync(
+                allIndexEntries, orgName);
+
+            Console.WriteLine(
+                $"Conversation index CSV saved.");
+
+            Console.WriteLine(
+                $"Files saved to ~/Salesmsg/{SanitizeName(orgName)}/");
+        }
+
+        public async Task ExportCallHistoryAsync(string orgName, string? fromDate = null)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Exporting call history for {orgName}...");
+
+            if (!string.IsNullOrEmpty(fromDate))
+                Console.WriteLine($"Date filter: calls since {fromDate} (UTC)");
+
+            Console.WriteLine();
+
+            Console.WriteLine("Fetching inboxes...");
+
+            List<(int Id, string Name)> inboxes =
+                await _apiService.GetAllInboxInfoAsync();
+
+            Console.WriteLine($"Found {inboxes.Count} inbox(es).");
+            Console.WriteLine();
+
+            var export = new CallHistoryExport
+            {
+                OrgName    = orgName,
+                ExportedAt = DateTime.UtcNow.ToString("O")
+            };
+
+            var exportedInboxes = new List<object>();
+            var noAccessInboxes = new List<object>();
+            var failedInboxes   = new List<object>();
+
+            foreach ((int inboxId, string inboxName) in inboxes)
+            {
+                Console.Write(
+                    $"Fetching calls for inbox {inboxId} ({inboxName})...");
+
+                var inboxHistory = new InboxCallHistory
+                {
+                    InboxId   = inboxId,
+                    InboxName = inboxName
+                };
+
+                try
+                {
+                    int page     = 1;
+                    bool hasMore = true;
+
+                    while (hasMore)
+                    {
+                        string raw =
+                            await _apiService.GetCallHistoryPageRawAsync(
+                                inboxId, page);
+
+                        (List<ExportCallEntry> calls, bool more) =
+                            CallHistoryMapper.MapPage(raw);
+
+                        // Client-side date filter — calls are newest-first so
+                        // stop as soon as we hit one older than the cutoff
+                        if (!string.IsNullOrEmpty(fromDate))
+                        {
+                            var filtered = new List<ExportCallEntry>();
+                            foreach (ExportCallEntry c in calls)
+                            {
+                                string callDate = c.CreatedAt.Length >= 10
+                                    ? c.CreatedAt[..10]
+                                    : c.CreatedAt;
+
+                                if (string.Compare(callDate, fromDate, StringComparison.Ordinal) < 0)
+                                {
+                                    more = false;
+                                    break;
+                                }
+                                filtered.Add(c);
+                            }
+                            calls = filtered;
+                        }
+
+                        foreach (ExportCallEntry call in calls)
+                        {
+                            inboxHistory.Calls.Add(call);
+
+                            if (string.Equals(call.Type, "inbound",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.InboundCalls++;
+                            else
+                                inboxHistory.OutboundCalls++;
+
+                            if (string.Equals(call.Outcome, "missed",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.MissedCalls++;
+                            else if (string.Equals(call.Outcome, "answered",
+                                    StringComparison.OrdinalIgnoreCase))
+                                inboxHistory.AnsweredCalls++;
+                        }
+
+                        hasMore = more;
+                        page++;
+                    }
+
+                    inboxHistory.TotalCalls = inboxHistory.Calls.Count;
+                    Console.WriteLine($" {inboxHistory.TotalCalls} call(s).");
+                    exportedInboxes.Add(new { inbox_id = inboxId, inbox_name = inboxName, call_count = inboxHistory.TotalCalls });
+                }
+                catch (System.Net.Http.HttpRequestException ex)
+                    when (ex.StatusCode ==
+                          System.Net.HttpStatusCode.Forbidden)
+                {
+                    Console.WriteLine(" no access — skipping.");
+                    noAccessInboxes.Add(new { inbox_id = inboxId, inbox_name = inboxName });
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($" failed: {ex.Message}");
+                    failedInboxes.Add(new { inbox_id = inboxId, inbox_name = inboxName, error = ex.Message });
+                }
+
+                export.Inboxes.Add(inboxHistory);
+            }
+
+            string json = JsonSerializer.Serialize(
+                export,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveCallHistoryAsync(json, orgName);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"Call history saved — " +
+                $"{export.ActiveInboxes} active, " +
+                $"{export.InactiveInboxes} inactive inbox(es).");
+
+            Console.WriteLine(
+                $"Saved to ~/Salesmsg/{SanitizeName(orgName)}/CallHistory.json");
+
+            // Access summary
+            Console.WriteLine();
+            Console.WriteLine("=== Inbox Access Summary ===");
+
+            Console.WriteLine($"Exported ({exportedInboxes.Count}):");
+            foreach (dynamic inbox in exportedInboxes)
+                Console.WriteLine($"  [{inbox.inbox_id}] {inbox.inbox_name} — {inbox.call_count} call(s)");
+
+            Console.WriteLine($"No access ({noAccessInboxes.Count}):");
+            foreach (dynamic inbox in noAccessInboxes)
+                Console.WriteLine($"  [{inbox.inbox_id}] {inbox.inbox_name}");
+
+            if (failedInboxes.Count > 0)
+            {
+                Console.WriteLine($"Failed ({failedInboxes.Count}):");
+                foreach (dynamic inbox in failedInboxes)
+                    Console.WriteLine($"  [{inbox.inbox_id}] {inbox.inbox_name} — {inbox.error}");
+            }
+
+            var accessSummary = new
+            {
+                org         = orgName,
+                generated_at = DateTime.UtcNow.ToString("O"),
+                exported    = exportedInboxes,
+                no_access   = noAccessInboxes,
+                failed      = failedInboxes
+            };
+
+            string summaryJson = JsonSerializer.Serialize(
+                accessSummary,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveCallHistoryAccessSummaryAsync(summaryJson, orgName);
+            Console.WriteLine();
+            Console.WriteLine($"Access summary saved to ~/Salesmsg/{SanitizeName(orgName)}/CallHistoryAccessSummary.json");
+        }
+
+        public async Task ExportMembersAsync(string orgName)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Exporting members for {orgName}...");
+
+            string raw = await _apiService.GetAllMembersRawAsync();
+
+            List<ExportMember> members = MemberMapper.MapMembers(raw);
+
+            Console.WriteLine($"Found {members.Count} member(s).");
+
+            string json = JsonSerializer.Serialize(
+                members,
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await FileExportHelper.SaveMembersAsync(json, orgName);
+
+            Console.WriteLine(
+                $"Members saved to ~/Salesmsg/{SanitizeName(orgName)}/Members.json");
+        }
+
+        private static string SanitizeName(string name) =>
+            System.Text.RegularExpressions.Regex.Replace(name, @"[^\w\d\-]", "");
     }
 }
